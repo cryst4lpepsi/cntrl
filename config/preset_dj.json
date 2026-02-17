@@ -1,0 +1,47 @@
+{
+  "name": "Default DJ Performance Mapping",
+  "description": "Optimized for live DJ performance and mixing",
+  "version": "1.0",
+  "mappings": {
+    "8": {
+      "name": "Index Finger Tip",
+      "gesture_type": "Y-Axis",
+      "cc_number": 74,
+      "min_value": 0,
+      "max_value": 127,
+      "description": "Filter Cutoff - Classic DJ filter sweep"
+    },
+    "12": {
+      "name": "Middle Finger Tip",
+      "gesture_type": "Y-Axis",
+      "cc_number": 71,
+      "min_value": 0,
+      "max_value": 127,
+      "description": "Filter Resonance - Adds character to filter"
+    },
+    "pinch_index": {
+      "name": "Index-Thumb Pinch",
+      "gesture_type": "Distance",
+      "cc_number": 7,
+      "min_value": 0,
+      "max_value": 127,
+      "description": "Volume Control - Pinch for silence, open for full"
+    },
+    "0": {
+      "name": "Wrist Position",
+      "gesture_type": "Rotation",
+      "cc_number": 91,
+      "min_value": 0,
+      "max_value": 127,
+      "description": "Effect Wet/Dry Mix"
+    },
+    "16": {
+      "name": "Ring Finger Tip",
+      "gesture_type": "X-Axis",
+      "cc_number": 10,
+      "min_value": 0,
+      "max_value": 127,
+      "description": "Stereo Pan - Left/Right"
+    }
+  }
+}
