@@ -1,100 +1,89 @@
-"""
-midi_controller.py
-MIDI output to FL Studio using python-rtmidi.
-
-Improvements:
-- Rate limiting (prevents FL from choking)
-- Better virtual port naming
-- Safer CC sending
-"""
-
-from __future__ import annotations
-
 import time
 import rtmidi
-from typing import List, Optional, Dict
 
 
 class MIDIController:
     def __init__(self):
         self.midi_out = rtmidi.MidiOut()
-        self.connected_port: Optional[str] = None
-        self.channel = 0  # MIDI channel 1 (0-indexed)
-
-        self._last_sent: Dict[int, float] = {}
-        self._min_interval = 0.01  # 10ms per CC (safe)
-
-    def get_available_ports(self) -> List[str]:
-        ports = self.midi_out.get_ports()
-        if not ports:
-            return ["(Create Virtual Port)"]
-        return ports
-
-    def connect(self, port_name: str) -> bool:
-        try:
-            ports = self.midi_out.get_ports()
-
-            if port_name == "(Create Virtual Port)":
-                # On Windows, this won't loop into FL Studio by default.
-                # Better: use loopMIDI and select that port.
-                self.midi_out.open_virtual_port("GestureKnobController")
-                self.connected_port = port_name
-                return True
-
-            for idx, port in enumerate(ports):
-                if port_name == port:
-                    self.midi_out.open_port(idx)
-                    self.connected_port = port_name
-                    return True
-
-            # fallback: substring match
-            for idx, port in enumerate(ports):
-                if port_name in port:
-                    self.midi_out.open_port(idx)
-                    self.connected_port = port_name
-                    return True
-
-            return False
-
-        except Exception as e:
-            print(f"[MIDI] Connect error: {e}")
-            return False
-
-    def disconnect(self):
-        try:
-            if self.midi_out.is_port_open():
-                self.midi_out.close_port()
-        except Exception:
-            pass
         self.connected_port = None
 
-    def send_cc(self, cc_number: int, value: int):
-        if not self.midi_out.is_port_open():
-            return
+        # Prevent spamming FL Studio - REDUCED for better responsiveness
+        self.last_cc = {}  # (channel, cc) -> value
+        self.last_sent_time = {}  # (channel, cc) -> time
+        self.min_interval = 0.005  # 5ms per CC max (200 fps)
 
-        cc_number = int(max(0, min(127, cc_number)))
-        value = int(max(0, min(127, value)))
+    def get_available_ports(self):
+        return list(self.midi_out.get_ports())
 
-        now = time.time()
-        last_t = self._last_sent.get(cc_number, 0.0)
-        if (now - last_t) < self._min_interval:
-            return
+    def connect(self, port_name: str) -> bool:
+        ports = self.midi_out.get_ports()
 
-        status = 0xB0 | (self.channel & 0x0F)
-        msg = [status, cc_number, value]
+        target_index = None
+        for i, p in enumerate(ports):
+            if p.strip() == port_name.strip():
+                target_index = i
+                break
+
+        if target_index is None:
+            print(f"[MIDI] Port not found: {port_name}")
+            print("[MIDI] Available ports:", ports)
+            return False
 
         try:
+            self.midi_out.open_port(target_index)
+            self.connected_port = port_name
+            print(f"[MIDI] Connected to: {port_name}")
+            return True
+        except Exception as e:
+            print("[MIDI] Failed to open port:", e)
+            return False
+
+    def is_connected(self) -> bool:
+        return self.connected_port is not None
+
+    def send_cc(self, cc: int, value: int, channel: int = 0):
+        if not self.is_connected():
+            return
+
+        cc = int(max(0, min(127, cc)))
+        value = int(max(0, min(127, value)))
+        channel = int(max(0, min(15, channel)))
+
+        key = (channel, cc)
+        now = time.time()  # FIXED: Moved BEFORE first use
+
+        # FIXED: Allow resending same value if enough time passed
+        if self.last_cc.get(key) == value:
+            last_t = self.last_sent_time.get(key, 0.0)
+            # Only skip if recently sent the exact same value
+            if (now - last_t) < 0.1:  # 100ms window
+                return
+
+        # Rate limit per CC
+        last_t = self.last_sent_time.get(key, 0.0)
+        if (now - last_t) < self.min_interval:
+            return
+
+        self.last_cc[key] = value
+        self.last_sent_time[key] = now
+
+        msg = [0xB0 | channel, cc, value]
+        try:
             self.midi_out.send_message(msg)
-            self._last_sent[cc_number] = now
+            # print(f"[MIDI] Sent CC{cc} = {value}")  # Uncomment for debug
         except Exception as e:
             print(f"[MIDI] Send error: {e}")
 
-    def is_connected(self) -> bool:
-        return self.midi_out.is_port_open()
+    def reset_cache(self):
+        """Call when tracking starts to avoid old CC values blocking first send."""
+        self.last_cc.clear()
+        self.last_sent_time.clear()
+        print("[MIDI] Cache reset")
 
     def close(self):
-        self.disconnect()
         try:
             self.midi_out.close_port()
         except Exception:
             pass
+        self.connected_port = None
+        self.reset_cache()

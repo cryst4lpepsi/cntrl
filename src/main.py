@@ -25,7 +25,16 @@ from hand_tracker import HandTracker
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 CONFIG_DIR = PROJECT_ROOT / "config"
-CONFIG_DIR.mkdir(exist_ok=True)
+CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+
+LANDMARK_NAMES = {
+    0: "Wrist",
+    1: "Thumb CMC", 2: "Thumb MCP", 3: "Thumb IP", 4: "Thumb Tip",
+    5: "Index MCP", 6: "Index PIP", 7: "Index DIP", 8: "Index Tip",
+    9: "Middle MCP", 10: "Middle PIP", 11: "Middle DIP", 12: "Middle Tip",
+    13: "Ring MCP", 14: "Ring PIP", 15: "Ring DIP", 16: "Ring Tip",
+    17: "Pinky MCP", 18: "Pinky PIP", 19: "Pinky DIP", 20: "Pinky Tip",
+}
 
 
 # ----------------------------
@@ -44,7 +53,6 @@ class CameraThread(QThread):
     def run(self):
         self.cap = cv2.VideoCapture(self.camera_index, cv2.CAP_DSHOW)
 
-        # stable defaults
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
 
@@ -79,7 +87,7 @@ class TrackingThread(QThread):
     """
     tracking_ready = Signal(object)  # (landmarks, handedness, fingertips, pinch)
 
-    def __init__(self, hand_tracker: HandTracker, fps: int = 12, size=(320, 180)):
+    def __init__(self, hand_tracker: HandTracker, fps: int = 12, size=(640, 360)):
         super().__init__()
         self.hand_tracker = hand_tracker
         self.running = False
@@ -106,10 +114,7 @@ class TrackingThread(QThread):
             if self.latest_frame is None:
                 continue
 
-            # Downscale for tracking (massive speedup)
             small = cv2.resize(self.latest_frame, self.size, interpolation=cv2.INTER_AREA)
-
-            # Detect
             res = self.hand_tracker.detect(small)
 
             fingertips: List[Tuple[float, float]] = []
@@ -123,7 +128,6 @@ class TrackingThread(QThread):
                     if tid < len(lms):
                         fingertips.append((float(lms[tid]["x"]), float(lms[tid]["y"])))
 
-                # pinch strength
                 if len(lms) > 8:
                     dx = float(lms[4]["x"]) - float(lms[8]["x"])
                     dy = float(lms[4]["y"]) - float(lms[8]["y"])
@@ -168,13 +172,13 @@ class MainWindow(QMainWindow):
         self.camera_thread: Optional[CameraThread] = None
         self.latest_frame: Optional[np.ndarray] = None
 
-        # tracking thread
-        self.tracking_thread = TrackingThread(self.hand_tracker, fps=12, size=(320, 180))
-        self.tracking_thread.tracking_ready.connect(self.on_tracking_data)
-        self.tracking_thread.start()
-
         # mappings
         self.mappings: Dict[str, Any] = self.load_mappings()
+
+        # tracking thread
+        self.tracking_thread = TrackingThread(self.hand_tracker, fps=12, size=(640, 360))
+        self.tracking_thread.tracking_ready.connect(self.on_tracking_data)
+        self.tracking_thread.start()
 
         # UI
         self.tabs = QTabWidget()
@@ -235,12 +239,17 @@ class MainWindow(QMainWindow):
         controls.addWidget(self.status_label, stretch=1)
 
         layout.addLayout(controls)
+
+        # live CC monitor (so you know it's working)
+        self.cc_monitor = QLabel("CC Output: (none)")
+        self.cc_monitor.setStyleSheet("color: #bbb; padding: 6px;")
+        layout.addWidget(self.cc_monitor)
+
         self.tab_live.setLayout(layout)
 
     def build_midi_tab(self):
         layout = QVBoxLayout()
 
-        # Camera group
         cam_group = QGroupBox("Camera Selection")
         cam_layout = QVBoxLayout()
 
@@ -253,7 +262,6 @@ class MainWindow(QMainWindow):
         cam_layout.addWidget(self.btn_refresh_cams)
         cam_group.setLayout(cam_layout)
 
-        # MIDI group
         midi_group = QGroupBox("MIDI Output")
         midi_layout = QVBoxLayout()
 
@@ -285,15 +293,20 @@ class MainWindow(QMainWindow):
         layout.addWidget(info)
 
         grid = QGridLayout()
-
         self.mapping_rows = []
+
         default_points = [8, 4, 12, 16, 20]
         default_ccs = [14, 74, 71, 73, 10]
 
         for row in range(5):
-            point_spin = QSpinBox()
-            point_spin.setRange(0, 20)
-            point_spin.setValue(default_points[row])
+            point_combo = QComboBox()
+            for pid in range(21):
+                name = LANDMARK_NAMES.get(pid, f"Point {pid}")
+                point_combo.addItem(f"{name} ({pid})", pid)
+
+            idx = point_combo.findData(default_points[row])
+            if idx != -1:
+                point_combo.setCurrentIndex(idx)
 
             gesture_combo = QComboBox()
             gesture_combo.addItems(["Y Position", "X Position", "Pinch"])
@@ -310,7 +323,7 @@ class MainWindow(QMainWindow):
 
             grid.addWidget(QLabel(f"Slot {row+1}"), row, 0)
             grid.addWidget(QLabel("Point"), row, 1)
-            grid.addWidget(point_spin, row, 2)
+            grid.addWidget(point_combo, row, 2)
             grid.addWidget(QLabel("Gesture"), row, 3)
             grid.addWidget(gesture_combo, row, 4)
             grid.addWidget(QLabel("CC"), row, 5)
@@ -318,13 +331,14 @@ class MainWindow(QMainWindow):
             grid.addWidget(enable_check, row, 7)
             grid.addWidget(invert_check, row, 8)
 
-            self.mapping_rows.append((point_spin, gesture_combo, cc_spin, enable_check, invert_check))
+            self.mapping_rows.append((point_combo, gesture_combo, cc_spin, enable_check, invert_check))
 
         layout.addLayout(grid)
 
         btns = QHBoxLayout()
         self.btn_save_map = QPushButton("Save Mapping")
         self.btn_load_map = QPushButton("Reload Mapping")
+
         self.btn_save_map.clicked.connect(self.save_mappings_from_ui)
         self.btn_load_map.clicked.connect(self.load_mappings_into_ui)
 
@@ -336,6 +350,7 @@ class MainWindow(QMainWindow):
         layout.addStretch(1)
 
         self.tab_mapping.setLayout(layout)
+
         self.load_mappings_into_ui()
 
     def build_visuals_tab(self):
@@ -431,15 +446,30 @@ class MainWindow(QMainWindow):
         self.start_camera_preview()
 
     # ----------------------------
-    # Tracking data callback
+    # Tracking callback (MIDI here)
     # ----------------------------
 
     def on_tracking_data(self, payload):
         landmarks, handedness, fingertips, pinch = payload
+
         self.latest_landmarks = landmarks
         self.latest_handedness = handedness
         self.latest_fingertips = fingertips
         self.latest_pinch = pinch
+
+        # Send MIDI only on tracking updates
+        if self.tracking_enabled and self.latest_landmarks and self.mappings:
+            cc_values = self.gesture_processor.process(
+                self.latest_landmarks,
+                self.latest_handedness,
+                self.mappings
+            )
+
+            if cc_values:
+                self.cc_monitor.setText(f"CC Output: {cc_values}")
+
+            for cc, val in cc_values.items():
+                self.midi.send_cc(cc, val)
 
     # ----------------------------
     # Tracking control
@@ -447,6 +477,7 @@ class MainWindow(QMainWindow):
 
     def start_tracking(self):
         port = self.midi_port_combo.currentText().strip()
+
         if not port:
             QMessageBox.warning(self, "MIDI", "No MIDI port selected.")
             return
@@ -462,39 +493,31 @@ class MainWindow(QMainWindow):
                 )
                 return
 
+        # clear cc cache if your MIDIController supports it
+        if hasattr(self.midi, "reset_cache"):
+            self.midi.reset_cache()
+
         self.tracking_enabled = True
         self.btn_start.setEnabled(False)
         self.btn_stop.setEnabled(True)
+
+        # reload mappings (in case mapping.json was created after startup)
+        self.mappings = self.load_mappings()
 
     def stop_tracking(self):
         self.tracking_enabled = False
         self.btn_start.setEnabled(True)
         self.btn_stop.setEnabled(False)
+        self.cc_monitor.setText("CC Output: (none)")
 
     # ----------------------------
     # Frame processing
     # ----------------------------
 
     def on_frame(self, frame: np.ndarray):
-        """
-        Called from camera thread.
-        """
         self.latest_frame = frame
-
-        # feed tracking thread
         self.tracking_thread.set_frame(frame)
 
-        # MIDI output only when tracking enabled
-        if self.tracking_enabled and self.latest_landmarks:
-            cc_values = self.gesture_processor.process(
-                self.latest_landmarks,
-                self.latest_handedness,
-                self.mappings
-            )
-            for cc, val in cc_values.items():
-                self.midi.send_cc(cc, val)
-
-        # CPU effects
         mode = self.effects_combo.currentText()
 
         if mode == "Off":
@@ -516,7 +539,13 @@ class MainWindow(QMainWindow):
         qimg = QImage(rgb.data, w, h, bytes_per_line, QImage.Format_RGB888)
         pix = QPixmap.fromImage(qimg)
 
-        self.video_label.setPixmap(pix)
+        self.video_label.setPixmap(
+            pix.scaled(
+                self.video_label.size(),
+                Qt.KeepAspectRatio,
+                Qt.SmoothTransformation
+            )
+        )
 
     # ----------------------------
     # Mapping storage
@@ -527,19 +556,37 @@ class MainWindow(QMainWindow):
 
     def load_mappings(self) -> Dict[str, Any]:
         path = self.mappings_path()
-        if path.exists():
+
+        # Auto-create mapping.json
+        if not path.exists():
+            default = {
+                "8": {
+                    "gesture_type": "Y Position",
+                    "cc_number": 14,
+                    "enabled": True,
+                    "invert": False,
+                    "min_value": 0,
+                    "max_value": 127,
+                    "hand": "Any"
+                }
+            }
             try:
-                return json.loads(path.read_text(encoding="utf-8"))
+                path.write_text(json.dumps(default, indent=2), encoding="utf-8")
             except Exception:
-                return {}
-        return {}
+                pass
+            return default
+
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
 
     def save_mappings_from_ui(self):
         mappings = {}
 
         for row in self.mapping_rows:
-            point_spin, gesture_combo, cc_spin, enable_check, invert_check = row
-            point_id = int(point_spin.value())
+            point_combo, gesture_combo, cc_spin, enable_check, invert_check = row
+            point_id = int(point_combo.currentData())
 
             mappings[str(point_id)] = {
                 "gesture_type": gesture_combo.currentText(),
@@ -558,16 +605,19 @@ class MainWindow(QMainWindow):
     def load_mappings_into_ui(self):
         self.mappings = self.load_mappings()
 
-        for row in self.mapping_rows:
-            point_spin, gesture_combo, cc_spin, enable_check, invert_check = row
-            pid = str(point_spin.value())
+        # Apply saved mapping to UI
+        for row_index in range(len(self.mapping_rows)):
+            point_combo, gesture_combo, cc_spin, enable_check, invert_check = self.mapping_rows[row_index]
+            pid = str(int(point_combo.currentData()))
 
-            if pid in self.mappings:
-                cfg = self.mappings[pid]
-                gesture_combo.setCurrentText(cfg.get("gesture_type", "Y Position"))
-                cc_spin.setValue(int(cfg.get("cc_number", 14)))
-                enable_check.setChecked(bool(cfg.get("enabled", True)))
-                invert_check.setChecked(bool(cfg.get("invert", False)))
+            if pid not in self.mappings:
+                continue
+
+            cfg = self.mappings[pid]
+            gesture_combo.setCurrentText(cfg.get("gesture_type", "Y Position"))
+            cc_spin.setValue(int(cfg.get("cc_number", 14)))
+            enable_check.setChecked(bool(cfg.get("enabled", True)))
+            invert_check.setChecked(bool(cfg.get("invert", False)))
 
     # ----------------------------
     # Status / close
@@ -602,7 +652,8 @@ def main():
     app = QApplication(sys.argv)
     w = MainWindow()
     w.show()
-    sys.exit(app.exec())
+    ret = app.exec()
+    sys.exit(ret)
 
 
 if __name__ == "__main__":

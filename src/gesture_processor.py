@@ -29,6 +29,7 @@ class GestureProcessor:
     ) -> Dict[int, int]:
         output_values: Dict[int, int] = {}
 
+
         # mapping keys might come as strings from JSON
         normalized_mappings = {}
         for k, v in mappings.items():
@@ -56,6 +57,7 @@ class GestureProcessor:
 
                     raw_value = self._get_gesture_value(landmarks, gesture_type, point_id)
                     midi_value = self._map_to_midi(raw_value, config)
+                    print("RAW:", raw_value, "MIDI:", midi_value, "CC:", cc_number)
 
                     # smoothing per (hand, cc)
                     key = f"{handedness}_{cc_number}"
